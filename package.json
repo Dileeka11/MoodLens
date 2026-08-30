@@ -1,0 +1,17 @@
+{
+  "name": "moodlens",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Mood-based movie recommendations \u2014 FastAPI + React, NCF + SBERT hybrid",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n backend,frontend -c magenta,cyan \"npm:dev:backend\" \"npm:dev:frontend\"",
+    "dev:backend": "node scripts/dev-backend.mjs",
+    "dev:frontend": "npm --prefix frontend run dev:client",
+    "build": "npm --prefix frontend run build",
+    "setup": "npm install && npm --prefix frontend install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

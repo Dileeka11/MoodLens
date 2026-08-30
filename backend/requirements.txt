@@ -1,0 +1,32 @@
+# MoodLens backend dependencies
+# Install with:  pip install -r requirements.txt
+# NOTE: install torch first if you want a specific CPU/CUDA build, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+# --- Web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# --- Database ---
+SQLAlchemy==2.0.36
+PyMySQL==1.1.1
+cryptography==44.0.0          # required by PyMySQL for MySQL 8 caching_sha2_password
+
+# --- Auth ---
+python-jose[cryptography]==3.3.0   # JWT encode/decode
+passlib[bcrypt]==1.7.4
+bcrypt==4.0.1                  # pinned: passlib 1.7.4 is incompatible with bcrypt>=4.1
+
+# --- Config / validation ---
+pydantic==2.10.4
+pydantic-settings==2.7.0
+email-validator==2.2.0
+python-dotenv==1.0.1
+
+# --- AI / ML (inference only, no retraining) ---
+torch==2.5.1
+sentence-transformers==3.3.1
+numpy==1.26.4
+pandas==2.2.3
+scikit-learn==1.6.0
