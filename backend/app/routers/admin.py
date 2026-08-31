@@ -3,6 +3,8 @@
 Every route depends on require_admin, so a normal user's token gets a 403.
 """
 
+import threading
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -23,7 +25,7 @@ from app.schemas import (
     PaginatedUsers,
     UserOut,
 )
-from app.services import evaluation, model_meta, model_registry
+from app.services import evaluation, model_meta, model_registry, tmdb_sync
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -235,3 +237,38 @@ def _meta_fields(meta: dict) -> dict:
         "evaluated_on_ratings": meta.get("evaluated_on_ratings"),
         "note": meta.get("note"),
     }
+
+
+# ----------------------------------------------------------------- tmdb sync
+
+@router.get("/sync/status")
+def sync_status():
+    return tmdb_sync.get_status()
+
+
+@router.post("/sync/posters", status_code=status.HTTP_202_ACCEPTED)
+def start_poster_sync():
+    """Backfill poster_url / overview / runtime from TMDB for existing movies."""
+    state = tmdb_sync.get_status()
+    if state["posters"]["running"]:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Poster sync already running")
+    threading.Thread(target=tmdb_sync.run_poster_sync, daemon=True).start()
+    return {"started": True}
+
+
+@router.post("/sync/recent", status_code=status.HTTP_202_ACCEPTED)
+def start_recent_sync(
+    year_from: int = Query(2001, ge=2001, le=2100),
+    min_votes: int = Query(300, ge=0),
+    per_year: int = Query(200, ge=1, le=1000),
+):
+    """Import post-2000 films from TMDB Discover."""
+    state = tmdb_sync.get_status()
+    if state["recent"]["running"]:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Recent sync already running")
+    threading.Thread(
+        target=tmdb_sync.run_recent_sync,
+        args=(year_from, min_votes, per_year),
+        daemon=True,
+    ).start()
+    return {"started": True}

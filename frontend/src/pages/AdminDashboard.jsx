@@ -1,6 +1,39 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import client, { errorMessage } from '../api/client';
 import { Alert, CountUp, Spinner } from '../components/Common';
+
+function SyncBar({ state, matched, missed }) {
+  const pct = state.total > 0 ? Math.round((state.done / state.total) * 100) : 0;
+  return (
+    <div>
+      {(state.running || state.done > 0) && (
+        <>
+          <div style={{
+            height: 6, borderRadius: 3, background: 'var(--surface-2)',
+            overflow: 'hidden', marginBottom: 6,
+          }}>
+            <div style={{
+              height: '100%', width: `${pct}%`,
+              background: 'var(--accent)', borderRadius: 3,
+              transition: 'width .4s',
+            }} />
+          </div>
+          <p className="muted tiny" style={{ margin: 0 }}>
+            {state.done} / {state.total} ({pct}%)
+            {state[matched] > 0 && <> · {state[matched]} {matched}</>}
+            {state[missed] > 0 && <> · {state[missed]} {missed}</>}
+          </p>
+        </>
+      )}
+      {state.error && <p className="tiny" style={{ color: 'var(--danger)', margin: '4px 0 0' }}>{state.error}</p>}
+      {!state.running && state.finished_at && (
+        <p className="muted tiny" style={{ margin: '4px 0 0' }}>
+          Done · {new Date(state.finished_at).toLocaleString()}
+        </p>
+      )}
+    </div>
+  );
+}
 
 const EMPTY_MOVIE = {
   title: '', genres: '', release_year: '', runtime_minutes: '',
@@ -20,6 +53,8 @@ export default function AdminDashboard() {
   const [evaluating, setEvaluating] = useState(false);
   const [metrics, setMetrics] = useState(null);
   const [metricsLoading, setMetricsLoading] = useState(false);
+  const [sync, setSync] = useState(null);
+  const syncPollRef = useRef(null);
 
   const loadMovies = useCallback(async () => {
     const { data } = await client.get('/admin/movies', { params: { q: query, page, per_page: 20 } });
@@ -31,11 +66,37 @@ export default function AdminDashboard() {
     Promise.all([
       client.get('/admin/stats').then(({ data }) => setStats(data)),
       client.get('/admin/model').then(({ data }) => setModel(data)),
+      client.get('/admin/sync/status').then(({ data }) => setSync(data)),
       loadMovies(),
     ])
       .catch((err) => setError(errorMessage(err, 'Could not load the dashboard')))
       .finally(() => setLoading(false));
   }, [loadMovies]);
+
+  // Poll sync status every 2 s while any job is running.
+  useEffect(() => {
+    const anyRunning = sync?.posters?.running || sync?.recent?.running;
+    if (anyRunning && !syncPollRef.current) {
+      syncPollRef.current = setInterval(async () => {
+        try {
+          const { data } = await client.get('/admin/sync/status');
+          setSync(data);
+          if (!data.posters.running && !data.recent.running) {
+            clearInterval(syncPollRef.current);
+            syncPollRef.current = null;
+            // Refresh movie count once sync finishes.
+            const { data: s } = await client.get('/admin/stats');
+            setStats(s);
+          }
+        } catch { /* ignore */ }
+      }, 2000);
+    }
+    if (!anyRunning && syncPollRef.current) {
+      clearInterval(syncPollRef.current);
+      syncPollRef.current = null;
+    }
+    return () => {};
+  }, [sync?.posters?.running, sync?.recent?.running]);
 
   // Debounce the search so each keystroke does not hit the API.
   useEffect(() => {
@@ -91,6 +152,17 @@ export default function AdminDashboard() {
       setError(errorMessage(err, 'Evaluation failed'));
     } finally {
       setEvaluating(false);
+    }
+  }
+
+  async function startSync(kind) {
+    setError('');
+    try {
+      await client.post(`/admin/sync/${kind}`);
+      const { data } = await client.get('/admin/sync/status');
+      setSync(data);
+    } catch (err) {
+      setError(errorMessage(err, 'Could not start sync'));
     }
   }
 
@@ -239,6 +311,56 @@ export default function AdminDashboard() {
             Without ground truth there is nothing to measure against.
           </p>
         )}
+      </div>
+
+      {/* --- tmdb sync --- */}
+      <div className="card" style={{ marginTop: 24 }}>
+        <h2 style={{ marginBottom: 4 }}>TMDB Sync</h2>
+        <p className="muted small" style={{ margin: '0 0 18px' }}>
+          Fetch posters, synopses and runtimes from TMDB, or import films released after 2000.
+        </p>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+          {/* posters */}
+          <div className="card card--flat card--pad-sm">
+            <div className="row row--between" style={{ marginBottom: 10 }}>
+              <strong className="small">Sync Posters &amp; Details</strong>
+              <button
+                className="btn btn--primary btn--sm"
+                onClick={() => startSync('posters')}
+                disabled={sync?.posters?.running || sync?.recent?.running}
+              >
+                {sync?.posters?.running ? <><Spinner /> Running…</> : 'Start'}
+              </button>
+            </div>
+            <p className="muted tiny" style={{ margin: '0 0 8px' }}>
+              Fills poster_url, synopsis and runtime for existing MovieLens movies that are missing them.
+            </p>
+            {sync?.posters && (
+              <SyncBar state={sync.posters} matched="matched" missed="missed" />
+            )}
+          </div>
+
+          {/* recent */}
+          <div className="card card--flat card--pad-sm">
+            <div className="row row--between" style={{ marginBottom: 10 }}>
+              <strong className="small">Import Recent Movies (2001+)</strong>
+              <button
+                className="btn btn--primary btn--sm"
+                onClick={() => startSync('recent')}
+                disabled={sync?.recent?.running || sync?.posters?.running}
+              >
+                {sync?.recent?.running ? <><Spinner /> Running…</> : 'Start'}
+              </button>
+            </div>
+            <p className="muted tiny" style={{ margin: '0 0 8px' }}>
+              Imports well-known films from 2001 to today via TMDB Discover (~200 per year, min 300 votes).
+            </p>
+            {sync?.recent && (
+              <SyncBar state={sync.recent} matched="added" missed="skipped" />
+            )}
+          </div>
+        </div>
       </div>
 
       {/* --- movie table --- */}
